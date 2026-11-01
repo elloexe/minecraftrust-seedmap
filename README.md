@@ -1,0 +1,1 @@
+# minecraftrust-seedmap

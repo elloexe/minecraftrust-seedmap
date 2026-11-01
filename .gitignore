@@ -1,0 +1,5 @@
+/target
+/.cache
+# Generated from the official 26.3 server jar by `cargo xtask extract`; never committed.
+/data/*.bin
+*.png.tmp

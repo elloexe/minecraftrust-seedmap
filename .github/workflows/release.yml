@@ -1,0 +1,77 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to publish (e.g. v1.0.0)"
+        required: true
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            artifact: minecraftrust-seedmap-windows-x64.exe
+            binary: target/release/minecraftrust-seedmap.exe
+          - os: ubuntu-latest
+            artifact: minecraftrust-seedmap-linux-x64
+            binary: target/release/minecraftrust-seedmap
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "25"
+      - name: Rust toolchain
+        run: rustup update stable && rustup default stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/cache@v4
+        with:
+          path: .cache
+          key: mojang-26.3-${{ runner.os }}
+      - name: Extract the 26.3 worldgen data from Mojang's server jar
+        run: cargo xtask extract
+      - name: Test the engine
+        run: cargo test --release -p seedmap-core
+      - name: Build
+        run: cargo build --release -p minecraftrust-seedmap
+      - name: Package
+        shell: bash
+        run: |
+          mkdir dist
+          cp "${{ matrix.binary }}" "dist/${{ matrix.artifact }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: dist/${{ matrix.artifact }}
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Checksums
+        run: cd dist && sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          name: Minecraft Rust Seedmap ${{ github.event.inputs.tag || github.ref_name }}
+          body_path: docs/RELEASE_NOTES.md
+          files: dist/*
+          make_latest: true

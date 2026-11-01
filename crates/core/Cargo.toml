@@ -1,0 +1,14 @@
+[package]
+name = "seedmap-core"
+description = "Minecraft Rust 26.3 seed engine: biomes, structures, spawn and seed search"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+claudium-core.workspace = true
+claudium-world.workspace = true
+serde_json.workspace = true
+flate2.workspace = true
+rayon.workspace = true

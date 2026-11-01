@@ -1,0 +1,33 @@
+[workspace]
+members = ["crates/core", "crates/app", "xtask"]
+resolver = "2"
+
+[workspace.package]
+version = "1.0.0"
+edition = "2024"
+license = "MIT"
+rust-version = "1.95"
+repository = "https://github.com/elloexe/minecraftrust-seedmap"
+
+[workspace.dependencies]
+# Minecraft Rust's own world generator: the same density functions, climate
+# index and structure placement the game runs, pinned to one commit.
+claudium-core = { git = "https://github.com/elloexe/minecraft-rust", rev = "ee25946d9a34563d37e3a827b7a282c376c9e0fc" }
+claudium-world = { git = "https://github.com/elloexe/minecraft-rust", rev = "ee25946d9a34563d37e3a827b7a282c376c9e0fc" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+flate2 = "1.1"
+rayon = "1.12"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+panic = "abort"
+strip = true
+
+# The engine is hot even in debug builds: keep it fast while iterating.
+[profile.dev.package."*"]
+opt-level = 3
+[profile.dev.package.seedmap-core]
+opt-level = 3

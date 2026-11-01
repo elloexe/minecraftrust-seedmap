@@ -1,0 +1,22 @@
+[package]
+name = "minecraftrust-seedmap"
+description = "Seed map and structure finder for Minecraft Rust 26.3"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "minecraftrust-seedmap"
+path = "src/main.rs"
+
+[dependencies]
+seedmap-core = { path = "../core" }
+eframe = { version = "0.37", features = ["persistence"] }
+egui = "0.37"
+serde = { workspace = true }
+rayon = { workspace = true }
+
+[build-dependencies]
+winresource = "0.1"

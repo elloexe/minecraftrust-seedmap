@@ -22,6 +22,7 @@ pub struct Settings {
     surface: bool,
     y_level: i32,
     grid: bool,
+    relief: bool,
     slime: bool,
     unverified: bool,
     highlight: Option<String>,
@@ -59,6 +60,7 @@ impl Default for Settings {
             surface: true,
             y_level: 64,
             grid: false,
+            relief: true,
             slime: false,
             unverified: false,
             highlight: None,
@@ -76,6 +78,7 @@ pub struct SeedmapApp {
     finder: Finder,
     goto: String,
     applied_seed: String,
+    logo: Option<egui::TextureHandle>,
 }
 
 /// `--seed <seed> --dimension <overworld|nether|end> --at <x> <z>
@@ -148,6 +151,16 @@ impl SeedmapApp {
             map,
             finder: Finder::default(),
             goto: String::new(),
+            logo: eframe::icon_data::from_png_bytes(include_bytes!("../../../assets/icon-64.png"))
+                .ok()
+                .map(|icon| {
+                    let image = egui::ColorImage::from_rgba_unmultiplied(
+                        [icon.width as usize, icon.height as usize],
+                        &icon.rgba,
+                    );
+                    cc.egui_ctx
+                        .load_texture("logo", image, egui::TextureOptions::LINEAR)
+                }),
         }
     }
 
@@ -175,27 +188,31 @@ impl SeedmapApp {
     fn top_bar(&mut self, ui: &mut egui::Ui) {
         ui.horizontal_centered(|ui| {
             ui.add_space(4.0);
-            ui.label(RichText::new("⛏").size(20.0).color(theme::ACCENT));
-            ui.label(RichText::new("Minecraft Rust Seedmap").heading().strong());
-            egui::Frame::NONE
-                .fill(theme::ACCENT_DIM)
-                .corner_radius(4)
-                .inner_margin(egui::Margin::symmetric(6, 2))
-                .show(ui, |ui| {
-                    ui.label(
-                        RichText::new("26.3")
-                            .small()
-                            .strong()
-                            .color(egui::Color32::WHITE),
-                    );
-                });
-            ui.separator();
+            if let Some(logo) = &self.logo {
+                ui.add(egui::Image::new((logo.id(), Vec2::splat(28.0))));
+            }
+            ui.vertical(|ui| {
+                ui.add_space(3.0);
+                ui.label(
+                    RichText::new("Minecraft Rust Seedmap")
+                        .font(theme::bold(15.5))
+                        .color(theme::TEXT),
+                );
+                ui.add_space(-4.0);
+                ui.label(
+                    RichText::new("biomes · structures · seed finder")
+                        .size(10.5)
+                        .color(theme::MUTED),
+                );
+            });
+            theme::pill(ui, "26.3", theme::ACCENT_DIM, egui::Color32::WHITE);
+            ui.add_space(10.0);
 
-            ui.label(RichText::new("Seed").color(theme::MUTED));
             let edit = egui::TextEdit::singleline(&mut self.s.seed_text)
-                .desired_width(200.0)
+                .desired_width(190.0)
                 .font(egui::TextStyle::Monospace)
-                .hint_text("number or text");
+                .margin(egui::Margin::symmetric(8, 5))
+                .hint_text("Seed: number or text");
             let r = ui.add(edit);
             if (r.lost_focus() || (r.changed() && self.s.seed_text.len() > 24))
                 && self.s.seed_text != self.applied_seed
@@ -226,29 +243,45 @@ impl SeedmapApp {
                 )
                 .on_hover_text("Text seeds are hashed like the game does (String.hashCode)");
             }
-            ui.separator();
+            ui.add_space(8.0);
 
-            for (i, d) in Dimension::ALL.iter().enumerate() {
-                let selected = self.s.dim == i as u8;
-                let text = RichText::new(d.name());
-                if ui
-                    .selectable_label(selected, if selected { text.strong() } else { text })
-                    .clicked()
-                {
-                    self.s.dim = i as u8;
-                    self.map.selected = None;
-                }
-            }
+            // Dimension switch as one segmented control.
+            egui::Frame::NONE
+                .fill(theme::CARD)
+                .stroke(egui::Stroke::new(1.0, theme::BORDER))
+                .corner_radius(8)
+                .inner_margin(egui::Margin::same(2))
+                .show(ui, |ui| {
+                    ui.spacing_mut().item_spacing.x = 2.0;
+                    for (i, d) in Dimension::ALL.iter().enumerate() {
+                        let selected = self.s.dim == i as u8;
+                        let (fill, ink) = if selected {
+                            (theme::ACCENT, egui::Color32::from_rgb(10, 24, 12))
+                        } else {
+                            (egui::Color32::TRANSPARENT, theme::MUTED)
+                        };
+                        let button = egui::Button::new(
+                            RichText::new(d.name()).font(theme::bold(12.5)).color(ink),
+                        )
+                        .fill(fill)
+                        .stroke(egui::Stroke::NONE)
+                        .corner_radius(6)
+                        .min_size(Vec2::new(78.0, 26.0));
+                        if ui.add(button).clicked() {
+                            self.s.dim = i as u8;
+                            self.map.selected = None;
+                        }
+                    }
+                });
             if self.s.dim == 0 {
                 ui.checkbox(&mut self.s.large_biomes, "Large biomes");
             }
-            ui.separator();
-
-            ui.label(RichText::new("Go to").color(theme::MUTED));
+            ui.add_space(8.0);
             let r = ui.add(
                 egui::TextEdit::singleline(&mut self.goto)
-                    .desired_width(110.0)
-                    .hint_text("x z"),
+                    .desired_width(120.0)
+                    .margin(egui::Margin::symmetric(8, 5))
+                    .hint_text("Go to: x z"),
             );
             if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                 let nums: Vec<f64> = self
@@ -265,14 +298,29 @@ impl SeedmapApp {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.add_space(6.0);
                 let label = if self.finder.running() {
-                    "🔎 Seed Finder ●"
+                    "🔎  Seed Finder  ●"
                 } else {
-                    "🔎 Seed Finder"
+                    "🔎  Seed Finder"
                 };
-                if ui
-                    .selectable_label(self.s.finder_open, RichText::new(label).strong())
-                    .clicked()
-                {
+                let (fill, ink) = if self.s.finder_open {
+                    (theme::ACCENT, egui::Color32::from_rgb(10, 24, 12))
+                } else {
+                    (theme::CARD, theme::TEXT)
+                };
+                let button =
+                    egui::Button::new(RichText::new(label).font(theme::bold(13.0)).color(ink))
+                        .fill(fill)
+                        .stroke(egui::Stroke::new(
+                            1.0,
+                            if self.s.finder_open {
+                                theme::ACCENT
+                            } else {
+                                theme::BORDER
+                            },
+                        ))
+                        .corner_radius(8)
+                        .min_size(Vec2::new(0.0, 30.0));
+                if ui.add(button).clicked() {
                     self.s.finder_open = !self.s.finder_open;
                 }
             });
@@ -303,29 +351,19 @@ impl SeedmapApp {
                 });
                 let mut sets: Vec<_> = cat.sets_in(dim).collect();
                 sets.sort_by_key(|s| s.label);
+                ui.spacing_mut().item_spacing.y = 2.0;
                 for set in sets {
-                    let mut on = self.s.layers.contains(&set.name);
-                    ui.horizontal(|ui| {
-                        let (r, _) = ui.allocate_exact_size(Vec2::splat(14.0), egui::Sense::hover());
-                        ui.painter().rect_filled(r.shrink(1.0), 4.0, theme::rgb(set.color));
-                        if ui.checkbox(&mut on, set.label).changed() {
-                            if on {
-                                self.s.layers.insert(set.name.clone());
-                            } else {
-                                self.s.layers.remove(&set.name);
-                            }
+                    let on = self.s.layers.contains(&set.name);
+                    let count = self.map.counts.get(&set.index).copied().filter(|_| on);
+                    if structure_row(ui, set, on, count).clicked() {
+                        if on {
+                            self.s.layers.remove(&set.name);
+                        } else {
+                            self.s.layers.insert(set.name.clone());
                         }
-                        if set.new_in_26 {
-                            ui.label(RichText::new("NEW").small().strong().color(theme::NEW))
-                                .on_hover_text("Added in Minecraft 26.x: other seed maps do not show it yet");
-                        }
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if let Some(n) = self.map.counts.get(&set.index).filter(|_| on) {
-                                ui.label(RichText::new(n.to_string()).small().color(theme::MUTED));
-                            }
-                        });
-                    });
+                    }
                 }
+                ui.add_space(4.0);
                 ui.label(RichText::new("Dense layers (treasure, mineshafts, fossils) appear when zoomed in.").small().color(theme::MUTED));
             });
 
@@ -344,6 +382,7 @@ impl SeedmapApp {
                     ui.add(egui::Slider::new(&mut self.s.y_level, -64..=320).text("Y").step_by(4.0))
                         .on_hover_text("Cave biomes (lush caves, deep dark, sulfur caves) show up underground");
                 }
+                ui.checkbox(&mut self.s.relief, "Terrain shading");
                 ui.checkbox(&mut self.s.grid, "Coordinate grid");
                 if dim == Dimension::Overworld {
                     ui.checkbox(&mut self.s.slime, "Slime chunks (zoom in)");
@@ -569,6 +608,7 @@ impl eframe::App for SeedmapApp {
                     slime: self.s.slime,
                     unverified: self.s.unverified,
                     highlight,
+                    relief: self.s.relief,
                 };
                 self.map.ui(ui, &self.pool, &view);
 
@@ -608,4 +648,92 @@ impl eframe::App for SeedmapApp {
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
         eframe::set_value(storage, eframe::APP_KEY, &self.s);
     }
+}
+
+/// One structure layer in the sidebar: its marker, name, count; click to toggle.
+fn structure_row(
+    ui: &mut egui::Ui,
+    set: &seedmap_core::structures::SetInfo,
+    on: bool,
+    count: Option<usize>,
+) -> egui::Response {
+    let width = ui.available_width();
+    let (rect, response) = ui.allocate_exact_size(Vec2::new(width, 28.0), egui::Sense::click());
+    let painter = ui.painter();
+    if response.hovered() {
+        painter.rect_filled(rect, 6.0, theme::CARD_HOVER);
+    }
+    let center = egui::pos2(rect.left() + 16.0, rect.center().y);
+    let color = if on {
+        theme::rgb(set.color)
+    } else {
+        egui::Color32::from_rgb(60, 65, 76)
+    };
+    painter.circle_filled(
+        center,
+        9.5,
+        if on {
+            egui::Color32::WHITE
+        } else {
+            theme::BORDER
+        },
+    );
+    painter.circle_filled(center, 8.0, color);
+    let ink = if on
+        && 0.299 * f32::from(set.color[0])
+            + 0.587 * f32::from(set.color[1])
+            + 0.114 * f32::from(set.color[2])
+            > 150.0
+    {
+        egui::Color32::from_rgb(24, 24, 28)
+    } else if on {
+        egui::Color32::WHITE
+    } else {
+        theme::MUTED
+    };
+    let size = if set.short.len() > 1 { 8.0 } else { 9.5 };
+    painter.text(
+        center + egui::vec2(0.0, 0.5),
+        egui::Align2::CENTER_CENTER,
+        set.short,
+        theme::bold(size),
+        ink,
+    );
+    let text_color = if on { theme::TEXT } else { theme::MUTED };
+    let label = painter.text(
+        egui::pos2(rect.left() + 34.0, rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        set.label,
+        egui::FontId::proportional(13.5),
+        text_color,
+    );
+    if set.new_in_26 {
+        let badge = egui::Rect::from_min_size(
+            egui::pos2(label.right() + 7.0, rect.center().y - 8.0),
+            Vec2::new(32.0, 16.0),
+        );
+        painter.rect_filled(badge, 8.0, theme::NEW);
+        painter.text(
+            badge.center(),
+            egui::Align2::CENTER_CENTER,
+            "NEW",
+            theme::bold(9.5),
+            egui::Color32::WHITE,
+        );
+    }
+    if let Some(n) = count {
+        painter.text(
+            egui::pos2(rect.right() - 8.0, rect.center().y),
+            egui::Align2::RIGHT_CENTER,
+            n.to_string(),
+            egui::FontId::proportional(11.5),
+            theme::MUTED,
+        );
+    }
+    let tip = if set.new_in_26 {
+        "Added in Minecraft 26.x: other seed maps do not show it yet. Click to toggle."
+    } else {
+        "Click to toggle"
+    };
+    response.on_hover_text(tip)
 }

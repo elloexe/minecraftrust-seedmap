@@ -1,19 +1,63 @@
 //! The app's look: a dark, calm UI that lets the map's colours speak.
-use egui::{Color32, CornerRadius, FontFamily, FontId, Margin, Stroke, TextStyle, Visuals};
+use egui::{
+    Color32, CornerRadius, FontData, FontDefinitions, FontFamily, FontId, Margin, Stroke,
+    TextStyle, Visuals,
+};
+use std::sync::Arc;
 
-pub const BG: Color32 = Color32::from_rgb(17, 19, 24);
-pub const PANEL: Color32 = Color32::from_rgb(23, 26, 32);
-pub const CARD: Color32 = Color32::from_rgb(31, 35, 43);
-pub const CARD_HOVER: Color32 = Color32::from_rgb(40, 45, 55);
-pub const BORDER: Color32 = Color32::from_rgb(46, 51, 62);
-pub const TEXT: Color32 = Color32::from_rgb(222, 226, 233);
-pub const MUTED: Color32 = Color32::from_rgb(140, 148, 162);
-pub const ACCENT: Color32 = Color32::from_rgb(92, 196, 108);
-pub const ACCENT_DIM: Color32 = Color32::from_rgb(52, 120, 64);
+pub const BG: Color32 = Color32::from_rgb(14, 16, 20);
+pub const PANEL: Color32 = Color32::from_rgb(21, 24, 30);
+pub const CARD: Color32 = Color32::from_rgb(29, 33, 41);
+pub const CARD_HOVER: Color32 = Color32::from_rgb(38, 43, 53);
+pub const BORDER: Color32 = Color32::from_rgb(42, 47, 58);
+pub const TEXT: Color32 = Color32::from_rgb(228, 231, 237);
+pub const MUTED: Color32 = Color32::from_rgb(134, 142, 157);
+pub const ACCENT: Color32 = Color32::from_rgb(98, 204, 112);
+pub const ACCENT_DIM: Color32 = Color32::from_rgb(44, 104, 56);
 pub const WARN: Color32 = Color32::from_rgb(240, 180, 70);
-pub const NEW: Color32 = Color32::from_rgb(255, 128, 96);
+pub const NEW: Color32 = Color32::from_rgb(255, 112, 88);
+
+const BOLD: &str = "semibold";
+
+/// The semibold UI font at a size.
+pub fn bold(size: f32) -> FontId {
+    FontId::new(size, FontFamily::Name(BOLD.into()))
+}
+
+/// Inter for the interface, with egui's own fonts behind it for symbols.
+fn fonts(ctx: &egui::Context) {
+    let mut fonts = FontDefinitions::default();
+    fonts.font_data.insert(
+        "inter".into(),
+        Arc::new(FontData::from_static(include_bytes!(
+            "../../../assets/fonts/Inter-Regular.ttf"
+        ))),
+    );
+    fonts.font_data.insert(
+        "inter-semibold".into(),
+        Arc::new(FontData::from_static(include_bytes!(
+            "../../../assets/fonts/Inter-SemiBold.ttf"
+        ))),
+    );
+    let fallback = fonts
+        .families
+        .get(&FontFamily::Proportional)
+        .cloned()
+        .unwrap_or_default();
+    fonts
+        .families
+        .entry(FontFamily::Proportional)
+        .or_default()
+        .insert(0, "inter".into());
+    let mut bold = vec!["inter-semibold".to_owned()];
+    bold.extend(fallback);
+    fonts.families.insert(FontFamily::Name(BOLD.into()), bold);
+    ctx.set_fonts(fonts);
+}
 
 pub fn apply(ctx: &egui::Context) {
+    fonts(ctx);
+    ctx.set_theme(egui::Theme::Dark);
     let mut visuals = Visuals::dark();
     visuals.panel_fill = PANEL;
     visuals.window_fill = PANEL;
@@ -51,18 +95,15 @@ pub fn apply(ctx: &egui::Context) {
         style.spacing.window_margin = Margin::same(12);
         style.spacing.interact_size.y = 26.0;
         style.text_styles = [
-            (
-                TextStyle::Heading,
-                FontId::new(19.0, FontFamily::Proportional),
-            ),
-            (TextStyle::Body, FontId::new(14.0, FontFamily::Proportional)),
+            (TextStyle::Heading, bold(18.0)),
+            (TextStyle::Body, FontId::new(13.5, FontFamily::Proportional)),
             (
                 TextStyle::Button,
-                FontId::new(14.0, FontFamily::Proportional),
+                FontId::new(13.5, FontFamily::Proportional),
             ),
             (
                 TextStyle::Small,
-                FontId::new(11.5, FontFamily::Proportional),
+                FontId::new(11.0, FontFamily::Proportional),
             ),
             (
                 TextStyle::Monospace,
@@ -89,8 +130,20 @@ pub fn card() -> egui::Frame {
 pub fn section_title(ui: &mut egui::Ui, text: &str) {
     ui.label(
         egui::RichText::new(text.to_uppercase())
-            .small()
-            .strong()
+            .font(bold(10.5))
+            .extra_letter_spacing(0.8)
             .color(MUTED),
     );
+}
+
+/// A small filled pill with text (badges like NEW or 26.3).
+pub fn pill(ui: &mut egui::Ui, text: &str, fill: Color32, ink: Color32) -> egui::Response {
+    egui::Frame::NONE
+        .fill(fill)
+        .corner_radius(CornerRadius::same(9))
+        .inner_margin(Margin::symmetric(7, 1))
+        .show(ui, |ui| {
+            ui.label(egui::RichText::new(text).font(bold(10.5)).color(ink));
+        })
+        .response
 }

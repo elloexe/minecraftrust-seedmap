@@ -69,6 +69,8 @@ pub struct Progress {
     pub found: AtomicU64,
     pub stop: AtomicBool,
     pub done: AtomicBool,
+    /// Milliseconds the search ran, once it has stopped.
+    pub elapsed_ms: AtomicU64,
     pub results: Mutex<Vec<Hit>>,
 }
 
@@ -84,9 +86,17 @@ impl Search {
     pub fn is_running(&self) -> bool {
         !self.progress.done.load(Ordering::Relaxed)
     }
+    /// Time spent searching (frozen once the search stops).
+    pub fn elapsed(&self) -> std::time::Duration {
+        if self.is_running() {
+            self.started.elapsed()
+        } else {
+            std::time::Duration::from_millis(self.progress.elapsed_ms.load(Ordering::Relaxed))
+        }
+    }
     pub fn seeds_per_second(&self) -> f64 {
         self.progress.checked.load(Ordering::Relaxed) as f64
-            / self.started.elapsed().as_secs_f64().max(1e-3)
+            / self.elapsed().as_secs_f64().max(1e-3)
     }
     pub fn join(self) {
         for h in self.handles {
@@ -114,6 +124,7 @@ pub fn start(config: SearchConfig) -> Search {
         .map(|d| d.as_nanos() as u64)
         .unwrap_or(1);
     let alive = Arc::new(AtomicU64::new(threads as u64));
+    let started = Instant::now();
     let handles = (0..threads)
         .map(|t| {
             let (progress, config, next, alive) = (
@@ -156,6 +167,9 @@ pub fn start(config: SearchConfig) -> Search {
                         progress.checked.fetch_add(done, Ordering::Relaxed);
                     }
                     if alive.fetch_sub(1, Ordering::AcqRel) == 1 {
+                        progress
+                            .elapsed_ms
+                            .store(started.elapsed().as_millis() as u64, Ordering::Relaxed);
                         progress.done.store(true, Ordering::Release);
                     }
                 })
@@ -164,7 +178,7 @@ pub fn start(config: SearchConfig) -> Search {
         .collect();
     Search {
         progress,
-        started: Instant::now(),
+        started,
         handles,
     }
 }

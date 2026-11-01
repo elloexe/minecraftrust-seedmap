@@ -1,22 +1,31 @@
 //! The map: biome tiles, structure markers, grid, slime chunks, spawn.
 use crate::jobs::{
-    Done, Height, Job, Marker, Pool, StructKey, TILE, TileKey, WorldKey, struct_tile_chunks,
+    Done, HEIGHT_PAD, Height, Job, Marker, Pool, StructKey, TILE, TileKey, WorldKey,
+    struct_tile_chunks,
 };
 use crate::theme;
 use egui::{
-    Align2, Color32, FontId, Pos2, Rect, Sense, Stroke, TextureHandle, TextureOptions, Vec2, pos2,
-    vec2,
+    Align2, Color32, FontId, Pos2, Rect, Sense, Stroke, TextureHandle, TextureOptions, pos2, vec2,
 };
 use seedmap_core::biomes::{color, display_name};
 use seedmap_core::structures::{Found, catalog, is_slime_chunk};
 use seedmap_core::{BiomeId, Dimension, data};
 use std::collections::{BTreeSet, HashMap};
 
+/// Sharp texels when zoomed in, smooth when zoomed out.
+const TILE_FILTER: TextureOptions = TextureOptions {
+    magnification: egui::TextureFilter::Nearest,
+    minification: egui::TextureFilter::Linear,
+    wrap_mode: egui::TextureWrapMode::ClampToEdge,
+    mipmap_mode: None,
+};
+
 pub const MIN_ZOOM: f64 = 1.0 / 512.0;
 pub const MAX_ZOOM: f64 = 8.0;
 
 struct Tile {
     ids: Vec<BiomeId>,
+    heights: Vec<i16>,
     tex: Option<TextureHandle>,
     style: u64,
     used: u64,
@@ -38,6 +47,7 @@ pub struct View<'a> {
     pub slime: bool,
     pub unverified: bool,
     pub highlight: Option<BiomeId>,
+    pub relief: bool,
 }
 
 pub struct MapState {
@@ -50,6 +60,7 @@ pub struct MapState {
     pub spawns: HashMap<WorldKey, [i32; 2]>,
     style: u64,
     last_highlight: Option<BiomeId>,
+    last_relief: bool,
     frame: u64,
     pub selected: Option<Selection>,
     /// Hovered block and biome name, for the status bar.
@@ -72,6 +83,7 @@ impl Default for MapState {
             spawns: HashMap::new(),
             style: 1,
             last_highlight: None,
+            last_relief: true,
             frame: 0,
             selected: None,
             cursor: None,
@@ -125,7 +137,97 @@ fn luminance(c: [u8; 3]) -> f32 {
 }
 
 fn darken(c: [u8; 3], f: f32) -> [u8; 3] {
-    c.map(|v| (f32::from(v) * f) as u8)
+    c.map(|v| (f32::from(v) * f).clamp(0.0, 255.0) as u8)
+}
+
+/// Biomes under water, which are shaded by depth instead of slope.
+fn water_mask() -> &'static Vec<bool> {
+    static MASK: std::sync::OnceLock<Vec<bool>> = std::sync::OnceLock::new();
+    MASK.get_or_init(|| {
+        data()
+            .biome_names
+            .iter()
+            .map(|n| n.contains("ocean") || n.contains("river"))
+            .collect()
+    })
+}
+
+/// A tile's pixels: biome colours, lit from the north-west by the terrain
+/// slope (hillshading), oceans darkened with depth, soft biome borders.
+fn render_tile(
+    ids: &[BiomeId],
+    heights: &[i16],
+    texel: i32,
+    highlight: Option<BiomeId>,
+    relief: bool,
+) -> egui::ColorImage {
+    let data = data();
+    let palette: Vec<[u8; 3]> = data.biome_names.iter().map(|n| color(n)).collect();
+    let water = water_mask();
+    let padded = TILE + 2 * HEIGHT_PAD;
+    let shaded = relief && heights.len() == padded * padded;
+    // Heights arrive in 1/16 blocks. The surface estimate comes in coarse
+    // vertical steps, so smooth it (5×5 box) before taking slopes.
+    let mut smooth = vec![0f32; if shaded { padded * padded } else { 0 }];
+    if shaded {
+        let raw = |x: usize, z: usize| f32::from(heights[z * padded + x]) / 16.0;
+        let mut rows = vec![0f32; padded * padded];
+        for z in 0..padded {
+            for x in 2..padded - 2 {
+                rows[z * padded + x] = (x - 2..=x + 2).map(|i| raw(i, z)).sum::<f32>() / 5.0;
+            }
+        }
+        for z in 2..padded - 2 {
+            for x in 2..padded - 2 {
+                smooth[z * padded + x] =
+                    (z - 2..=z + 2).map(|j| rows[j * padded + x]).sum::<f32>() / 5.0;
+            }
+        }
+    }
+    let h = |x: usize, z: usize| smooth[z * padded + x];
+    // Exaggerate relief as tiles cover more ground per texel.
+    let gain = 0.85 * (texel as f32 / 4.0).powf(0.2).min(1.6);
+    let mut pixels = Vec::with_capacity(TILE * TILE);
+    for z in 0..TILE {
+        for x in 0..TILE {
+            let id = ids.get(z * TILE + x).copied().unwrap_or_default();
+            let mut c = palette.get(usize::from(id.0)).copied().unwrap_or([0, 0, 0]);
+            let wet = water.get(usize::from(id.0)).copied().unwrap_or(false);
+            if shaded {
+                let (px, pz) = (x + HEIGHT_PAD, z + HEIGHT_PAD);
+                let dx = h(px + 1, pz) - h(px - 1, pz);
+                let dz = h(px, pz + 1) - h(px, pz - 1);
+                let slope = (dx + dz) / (2.0 * texel as f32);
+                let mut light = 1.0 + (slope * gain).clamp(-0.42, 0.38);
+                let top = f32::from(heights[pz * padded + px]) / 16.0;
+                if wet {
+                    // Water is flat: keep a hint of the sea floor, darken with depth.
+                    light = 1.0 + (light - 1.0) * 0.35;
+                    light *= 1.0 - ((63.0 - top).max(0.0) / 90.0).min(0.3);
+                } else {
+                    // High ground a touch lighter.
+                    light *= 1.0 + ((top - 64.0) / 900.0).clamp(-0.04, 0.12);
+                }
+                c = darken(c, light);
+            }
+            // Soft outlines where the biome changes.
+            let right = (x + 1 < TILE).then(|| ids.get(z * TILE + x + 1)).flatten();
+            let down = (z + 1 < TILE)
+                .then(|| ids.get((z + 1) * TILE + x))
+                .flatten();
+            if right.is_some_and(|r| *r != id) || down.is_some_and(|d| *d != id) {
+                c = darken(c, 0.86);
+            }
+            if let Some(hl) = highlight
+                && id != hl
+            {
+                let g = (luminance(c) * 0.22) as u8 + 14;
+                c = [g, g, g.saturating_add(5)];
+            }
+            pixels.push(Color32::from_rgb(c[0], c[1], c[2]));
+        }
+    }
+    egui::ColorImage::new([TILE, TILE], pixels)
 }
 
 impl MapState {
@@ -141,11 +243,12 @@ impl MapState {
     pub fn absorb(&mut self, done: Vec<Done>) {
         for d in done {
             match d {
-                Done::Biome(key, ids) => {
+                Done::Biome(key, ids, heights) => {
                     self.tiles.insert(
                         key,
                         Tile {
                             ids,
+                            heights,
                             tex: None,
                             style: 0,
                             used: self.frame,
@@ -182,47 +285,18 @@ impl MapState {
         ctx: &egui::Context,
         key: TileKey,
         highlight: Option<BiomeId>,
+        relief: bool,
     ) -> Option<egui::TextureId> {
         let style = self.style;
         let frame = self.frame;
         let tile = self.tiles.get_mut(&key)?;
         tile.used = frame;
         if tile.tex.is_none() || tile.style != style {
-            let data = data();
-            let palette: Vec<[u8; 3]> = data.biome_names.iter().map(|n| color(n)).collect();
-            let mut pixels = Vec::with_capacity(TILE * TILE);
-            for z in 0..TILE {
-                for x in 0..TILE {
-                    let id = tile.ids.get(z * TILE + x).copied().unwrap_or_default();
-                    let mut c = palette.get(usize::from(id.0)).copied().unwrap_or([0, 0, 0]);
-                    // Soft outlines where the biome changes.
-                    let right = if x + 1 < TILE {
-                        tile.ids.get(z * TILE + x + 1)
-                    } else {
-                        None
-                    };
-                    let down = if z + 1 < TILE {
-                        tile.ids.get((z + 1) * TILE + x)
-                    } else {
-                        None
-                    };
-                    if right.is_some_and(|r| *r != id) || down.is_some_and(|d| *d != id) {
-                        c = darken(c, 0.82);
-                    }
-                    if let Some(h) = highlight
-                        && id != h
-                    {
-                        let g = (luminance(c) * 0.25) as u8 + 12;
-                        c = [g, g, g + 4];
-                    }
-                    pixels.push(Color32::from_rgb(c[0], c[1], c[2]));
-                }
-            }
-            let image = egui::ColorImage::new([TILE, TILE], pixels);
+            let image = render_tile(&tile.ids, &tile.heights, key.texel(), highlight, relief);
             let name = format!("tile {key:?}");
             match &mut tile.tex {
-                Some(t) => t.set(image, TextureOptions::NEAREST),
-                None => tile.tex = Some(ctx.load_texture(name, image, TextureOptions::NEAREST)),
+                Some(t) => t.set(image, TILE_FILTER),
+                None => tile.tex = Some(ctx.load_texture(name, image, TILE_FILTER)),
             }
             tile.style = style;
         }
@@ -231,8 +305,9 @@ impl MapState {
 
     pub fn ui(&mut self, ui: &mut egui::Ui, pool: &Pool, view: &View<'_>) {
         self.frame += 1;
-        if view.highlight != self.last_highlight {
+        if view.highlight != self.last_highlight || view.relief != self.last_relief {
             self.last_highlight = view.highlight;
+            self.last_relief = view.relief;
             self.style += 1;
         }
         let (response, painter) = ui.allocate_painter(ui.available_size(), Sense::click_and_drag());
@@ -296,7 +371,8 @@ impl MapState {
                             f64::from(tz + 1) * span,
                         );
                         let tile_rect = Rect::from_min_max(min, max);
-                        if let Some(tex) = self.texture(ui.ctx(), key, view.highlight) {
+                        if let Some(tex) = self.texture(ui.ctx(), key, view.highlight, view.relief)
+                        {
                             painter.image(
                                 tex,
                                 tile_rect,
@@ -472,7 +548,8 @@ impl MapState {
 
         // Paint markers, find the hovered one.
         let hover = response.hover_pos();
-        let radius = (7.0 + (self.zoom.log2() as f32 + 4.0).clamp(0.0, 6.0)).min(13.0);
+        // Small dots far out, lettered badges closer in.
+        let radius = 4.5 + (self.zoom.log2() as f32 + 4.5).clamp(0.0, 7.0);
         let mut hovered: Option<(f32, usize)> = None;
         for (i, (p, _, _, _)) in markers.iter().enumerate() {
             if let Some(h) = hover {
@@ -493,11 +570,12 @@ impl MapState {
             draw_marker(
                 &painter,
                 *p,
-                radius * if big { 1.25 } else { 1.0 },
+                radius * if big { 1.22 } else { 1.0 },
                 info.color,
                 short,
                 *valid,
                 selected,
+                info.spacing.is_none(),
             );
         }
 
@@ -590,7 +668,48 @@ impl MapState {
         });
 
         self.draw_scale(&painter, rect);
+        self.draw_controls(ui, rect);
+        if self.loading > 0 {
+            // A slim moving bar while tiles are generated.
+            let t = ui.input(|i| i.time) as f32;
+            let w = rect.width() * 0.25;
+            let x = rect.left() + ((t * 0.6).fract() * (rect.width() + w)) - w;
+            let bar = Rect::from_min_max(
+                pos2(x.max(rect.left()), rect.top()),
+                pos2((x + w).min(rect.right()), rect.top() + 2.5),
+            );
+            painter.rect_filled(bar, 1.0, theme::ACCENT);
+            ui.ctx().request_repaint();
+        }
         self.evict();
+    }
+
+    /// Floating zoom and recentre buttons at the map's top-right corner.
+    fn draw_controls(&mut self, ui: &mut egui::Ui, rect: Rect) {
+        let size = vec2(34.0, 34.0);
+        let x = rect.right() - size.x - 14.0;
+        let mut y = rect.top() + 14.0;
+        let buttons: [(&str, &str); 3] =
+            [("+", "Zoom in"), ("−", "Zoom out"), ("⌖", "Back to 0, 0")];
+        for (i, (label, tip)) in buttons.into_iter().enumerate() {
+            let r = Rect::from_min_size(pos2(x, y), size);
+            let button = egui::Button::new(
+                egui::RichText::new(label)
+                    .font(theme::bold(18.0))
+                    .color(theme::TEXT),
+            )
+            .fill(Color32::from_rgba_unmultiplied(23, 26, 32, 235))
+            .stroke(Stroke::new(1.0, theme::BORDER))
+            .corner_radius(8);
+            if ui.put(r, button).on_hover_text(tip).clicked() {
+                match i {
+                    0 => self.zoom = (self.zoom * 2.0).min(MAX_ZOOM),
+                    1 => self.zoom = (self.zoom / 2.0).max(MIN_ZOOM),
+                    _ => self.go_to(0.0, 0.0),
+                }
+            }
+            y += size.y + 6.0;
+        }
     }
 
     fn draw_grid(
@@ -655,7 +774,13 @@ impl MapState {
         let w = (best * self.zoom) as f32;
         let base = pos2(rect.left() + 16.0, rect.bottom() - 18.0);
         let bg = Rect::from_min_size(base - vec2(8.0, 22.0), vec2(w + 16.0, 30.0));
-        painter.rect_filled(bg, 6.0, Color32::from_rgba_unmultiplied(15, 17, 21, 190));
+        painter.rect_filled(bg, 8.0, Color32::from_rgba_unmultiplied(23, 26, 32, 225));
+        painter.rect_stroke(
+            bg,
+            8.0,
+            Stroke::new(1.0, theme::BORDER),
+            egui::StrokeKind::Inside,
+        );
         let s = Stroke::new(2.0, theme::TEXT);
         painter.line_segment([base, base + vec2(w, 0.0)], s);
         painter.line_segment([base, base - vec2(0.0, 6.0)], s);
@@ -690,6 +815,7 @@ impl MapState {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn draw_marker(
     painter: &egui::Painter,
     p: Pos2,
@@ -698,47 +824,69 @@ fn draw_marker(
     text: &str,
     valid: bool,
     selected: bool,
+    diamond: bool,
 ) {
+    let ink = if luminance(c) > 150.0 {
+        Color32::from_rgb(24, 24, 28)
+    } else {
+        Color32::WHITE
+    };
+    let shape = |center: Pos2, radius: f32, fill: Color32, stroke: Stroke| {
+        if diamond {
+            let pts = vec![
+                center + vec2(0.0, -radius * 1.2),
+                center + vec2(radius * 1.2, 0.0),
+                center + vec2(0.0, radius * 1.2),
+                center + vec2(-radius * 1.2, 0.0),
+            ];
+            egui::Shape::convex_polygon(pts, fill, stroke)
+        } else {
+            egui::Shape::circle_filled(center, radius, fill)
+        }
+    };
+    // Soft shadow.
+    for (grow, alpha) in [(3.0, 40), (1.5, 70)] {
+        painter.add(shape(
+            p + vec2(0.0, 2.0),
+            r + grow,
+            Color32::from_black_alpha(alpha),
+            Stroke::NONE,
+        ));
+    }
+    if selected {
+        painter.add(shape(
+            p,
+            r + 5.0,
+            Color32::from_rgba_unmultiplied(255, 255, 255, 60),
+            Stroke::NONE,
+        ));
+    }
+    let ring = if valid {
+        Color32::WHITE
+    } else {
+        Color32::from_white_alpha(120)
+    };
+    painter.add(shape(p, r + 1.8, ring, Stroke::NONE));
     let fill = if valid {
         theme::rgb(c)
     } else {
-        Color32::from_rgba_unmultiplied(c[0], c[1], c[2], 70)
+        Color32::from_rgb(c[0] / 3 + 20, c[1] / 3 + 20, c[2] / 3 + 24)
     };
-    let rect = Rect::from_center_size(p, Vec2::splat(r * 2.0));
-    painter.rect_filled(
-        rect.translate(vec2(1.0, 2.0)),
-        r * 0.45,
-        Color32::from_black_alpha(110),
-    );
-    painter.rect_filled(rect, r * 0.45, fill);
-    let outline = if selected {
-        Color32::WHITE
-    } else {
-        Color32::from_rgb(15, 17, 21)
-    };
-    painter.rect_stroke(
-        rect,
-        r * 0.45,
-        Stroke::new(if selected { 2.5 } else { 1.5 }, outline),
-        egui::StrokeKind::Outside,
-    );
-    let ink = if luminance(c) > 140.0 {
-        Color32::from_rgb(20, 20, 24)
-    } else {
-        Color32::WHITE
-    };
-    let size = if text.len() > 1 { r * 0.95 } else { r * 1.2 };
-    painter.text(
-        p + vec2(0.0, 0.5),
-        Align2::CENTER_CENTER,
-        text,
-        FontId::proportional(size),
-        if valid {
-            ink
-        } else {
-            Color32::from_white_alpha(160)
-        },
-    );
+    painter.add(shape(p, r, fill, Stroke::NONE));
+    if r >= 6.5 {
+        let size = if text.len() > 1 { r * 0.92 } else { r * 1.18 };
+        painter.text(
+            p + vec2(0.0, 0.5),
+            Align2::CENTER_CENTER,
+            text,
+            theme::bold(size),
+            if valid {
+                ink
+            } else {
+                Color32::from_white_alpha(170)
+            },
+        );
+    }
 }
 
 fn draw_star(painter: &egui::Painter, p: Pos2, r: f32) {

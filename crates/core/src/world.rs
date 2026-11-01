@@ -313,11 +313,14 @@ impl<'w> Sampler<'w> {
         step: i32,
         qy: i32,
         out: &mut Vec<BiomeId>,
+        heights: &mut Vec<i16>,
     ) {
         let Some(surface) = self.world.surface().cloned() else {
+            heights.clear();
             return self.biome_grid(qx, qz, w, h, step, qy, out);
         };
         out.clear();
+        heights.clear();
         let Ok(volume) = DensityVolume::new(
             [w as i32, 1, h as i32],
             [qx.wrapping_shl(2), 0, qz.wrapping_shl(2)],
@@ -347,7 +350,9 @@ impl<'w> Sampler<'w> {
                 let n = j * w + i;
                 let x = (qx + i as i32 * step) << 2;
                 let z = (qz + j as i32 * step) << 2;
-                let y = ((fields[6][n].floor() as i32) >> 2) << 2;
+                let top = fields[6][n].floor() as i32;
+                heights.push(top as i16);
+                let y = (top >> 2) << 2;
                 fields[4][n] = depth
                     .sample_value(&mut self.context, [x, y, z])
                     .unwrap_or(0.0);
@@ -355,6 +360,37 @@ impl<'w> Sampler<'w> {
                 let b = self.find(values);
                 out.push(b);
             }
+        }
+    }
+
+    /// The preliminary surface level on a grid (bulk sampled), in 1/16
+    /// blocks, for shading a map. Empty outside the overworld.
+    pub fn surface_grid(
+        &mut self,
+        qx: i32,
+        qz: i32,
+        w: usize,
+        h: usize,
+        step: i32,
+        out: &mut Vec<i16>,
+    ) {
+        out.clear();
+        let Some(surface) = self.world.surface().cloned() else {
+            return;
+        };
+        let Ok(volume) = DensityVolume::new(
+            [w as i32, 1, h as i32],
+            [qx.wrapping_shl(2), 0, qz.wrapping_shl(2)],
+            [step * 4, 4, step * 4],
+        ) else {
+            return;
+        };
+        let mut field = vec![0f32; volume.size()];
+        if surface
+            .sample_volume(&mut self.context, &mut field, volume)
+            .is_ok()
+        {
+            out.extend(field.iter().map(|v| (v * 16.0).round() as i16));
         }
     }
 

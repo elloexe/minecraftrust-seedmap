@@ -9,6 +9,8 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Condvar, Mutex};
 
 pub const TILE: usize = 256;
+/// Texels of terrain height around each tile (for smoothing and slopes).
+pub const HEIGHT_PAD: usize = 3;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct WorldKey {
@@ -69,7 +71,8 @@ pub enum Job {
 }
 
 pub enum Done {
-    Biome(TileKey, Vec<BiomeId>),
+    /// Biomes, and terrain heights on a (TILE + 2·HEIGHT_PAD)² grid (empty: flat).
+    Biome(TileKey, Vec<BiomeId>, Vec<i16>),
     Structures(StructKey, Vec<Marker>),
     Strongholds(WorldKey, Vec<Found>),
     Spawn(WorldKey, [i32; 2]),
@@ -195,15 +198,34 @@ fn run(shared: &Shared, job: Job) -> Done {
             // Sample texel centres.
             let half = step / 2;
             let mut out = Vec::with_capacity(TILE * TILE);
+            let mut scratch = Vec::new();
             match key.height {
-                Height::Surface => {
-                    sampler.biome_grid_surface(qx + half, qz + half, TILE, TILE, step, 16, &mut out)
-                }
+                Height::Surface => sampler.biome_grid_surface(
+                    qx + half,
+                    qz + half,
+                    TILE,
+                    TILE,
+                    step,
+                    16,
+                    &mut out,
+                    &mut scratch,
+                ),
                 Height::Fixed(y) => {
                     sampler.biome_grid(qx + half, qz + half, TILE, TILE, step, y >> 2, &mut out)
                 }
             }
-            Done::Biome(key, out)
+            // Terrain heights with a border, so shading is seamless across tiles.
+            let mut heights = Vec::new();
+            let pad = HEIGHT_PAD as i32 * step;
+            sampler.surface_grid(
+                qx + half - pad,
+                qz + half - pad,
+                TILE + 2 * HEIGHT_PAD,
+                TILE + 2 * HEIGHT_PAD,
+                step,
+                &mut heights,
+            );
+            Done::Biome(key, out, heights)
         }
         Job::Structures(key) => {
             let w = world(shared, key.world);

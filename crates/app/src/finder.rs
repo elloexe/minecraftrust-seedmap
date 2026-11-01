@@ -55,13 +55,13 @@ impl Default for FinderSettings {
             conditions: vec![
                 Cond::Structure {
                     set: "minecraft:villages".into(),
-                    count: 1,
-                    radius: 300,
+                    count: 2,
+                    radius: 250,
                 },
                 Cond::Structure {
                     set: "minecraft:abandoned_camp".into(),
-                    count: 1,
-                    radius: 600,
+                    count: 2,
+                    radius: 400,
                 },
             ],
             source: Source::Random,
@@ -211,7 +211,20 @@ impl Finder {
     }
 
     /// The panel. Returns a seed to open on the map.
+    /// The panel, scrollable as a whole. Returns a seed to open on the map.
     pub fn ui(
+        &mut self,
+        ui: &mut egui::Ui,
+        s: &mut FinderSettings,
+        large_biomes: bool,
+    ) -> Option<i64> {
+        egui::ScrollArea::vertical()
+            .id_salt("finder")
+            .show(ui, |ui| self.body(ui, s, large_biomes))
+            .inner
+    }
+
+    fn body(
         &mut self,
         ui: &mut egui::Ui,
         s: &mut FinderSettings,
@@ -542,33 +555,50 @@ impl Finder {
             }
             let checked = p.checked.load(Ordering::Relaxed);
             let stage = p.stage_one.load(Ordering::Relaxed);
-            theme::card().show(ui, |ui| {
-                ui.set_width(ui.available_width());
-                egui::Grid::new("stats")
-                    .num_columns(2)
-                    .spacing([16.0, 2.0])
-                    .show(ui, |ui| {
-                        ui.label(RichText::new("Speed").color(theme::MUTED));
-                        ui.label(
-                            RichText::new(rate(search.seeds_per_second()))
-                                .strong()
-                                .color(theme::ACCENT),
-                        );
-                        ui.end_row();
-                        ui.label(RichText::new("Checked").color(theme::MUTED));
-                        ui.label(count(checked));
-                        ui.end_row();
-                        ui.label(RichText::new("Passed stage 1").color(theme::MUTED));
-                        ui.label(count(stage));
-                        ui.end_row();
-                        ui.label(RichText::new("Found").color(theme::MUTED));
-                        ui.label(RichText::new(self.results.len().to_string()).strong());
-                        ui.end_row();
-                        ui.label(RichText::new("Time").color(theme::MUTED));
-                        ui.label(format!("{:.1} s", search.started.elapsed().as_secs_f64()));
-                        ui.end_row();
-                    });
-            });
+            let running = search.is_running();
+            let tiles = [
+                ("Speed", rate(search.seeds_per_second()), true),
+                ("Found", self.results.len().to_string(), false),
+                ("Checked", count(checked), false),
+                ("Passed stage 1", count(stage), false),
+            ];
+            egui::Grid::new("stats")
+                .num_columns(2)
+                .spacing([6.0, 6.0])
+                .min_col_width((ui.available_width() - 6.0) / 2.0)
+                .show(ui, |ui| {
+                    for (i, (label, value, accent)) in tiles.iter().enumerate() {
+                        theme::card().show(ui, |ui| {
+                            ui.set_min_width((ui.available_width()).max(120.0));
+                            ui.vertical(|ui| {
+                                ui.spacing_mut().item_spacing.y = 0.0;
+                                ui.label(RichText::new(*label).size(11.0).color(theme::MUTED));
+                                ui.label(
+                                    RichText::new(value)
+                                        .font(theme::bold(19.0))
+                                        .color(if *accent { theme::ACCENT } else { theme::TEXT }),
+                                );
+                            });
+                        });
+                        if i % 2 == 1 {
+                            ui.end_row();
+                        }
+                    }
+                });
+            ui.label(
+                RichText::new(format!(
+                    "{} {:.1} s on {} threads",
+                    if running {
+                        "Searching for"
+                    } else {
+                        "Searched for"
+                    },
+                    search.elapsed().as_secs_f64(),
+                    s.threads
+                ))
+                .small()
+                .color(theme::MUTED),
+            );
             if search.is_running() {
                 ui.ctx()
                     .request_repaint_after(std::time::Duration::from_millis(150));
@@ -579,9 +609,8 @@ impl Finder {
         if !self.results.is_empty() {
             theme::section_title(ui, "Results");
         }
-        egui::ScrollArea::vertical()
-            .id_salt("results")
-            .show(ui, |ui| {
+        {
+            {
                 for hit in &self.results {
                     theme::card().show(ui, |ui| {
                         ui.set_width(ui.available_width());
@@ -604,7 +633,8 @@ impl Finder {
                         }
                     });
                 }
-            });
+            }
+        }
         open
     }
 }

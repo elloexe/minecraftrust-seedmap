@@ -1,20 +1,20 @@
-The first release: a seed map and structure finder for **Minecraft Rust 26.3** (and vanilla Java 26.3).
+A visual overhaul of the map and the app.
 
 ### Download
 - **Windows:** `minecraftrust-seedmap-windows-x64.exe`. It's a single file and nothing needs installing. If SmartScreen warns you, choose *More info → Run anyway*.
 - **Linux:** `minecraftrust-seedmap-linux-x64`. Run `chmod +x` on it first.
 
-### What's in it
-- Biome maps for the Overworld, Nether and End, plus Large Biomes, at the surface or any Y level (so cave biomes show up)
-- All 21 structure sets of 26.3, including the new **Abandoned Camp**, all 128 strongholds and the exact world spawn
-- New 26.x biomes: **Dappled Forest** and **Sulfur Caves**
-- A multi-threaded seed finder. Stage 1 checks structure placement only, at about 200 M region tests/s per thread, then candidates get real biome and terrain checks. It has presets for quad witch huts, a village at spawn, mushroom islands and more.
-- Slime chunks, a coordinate grid, biome highlight, copy `/tp`, and text seeds
+### New look
+- **Terrain shading:** biomes are lit by the terrain under them, so mountains, valleys and ocean depth show at a glance. You can switch it off under *Map → Terrain shading*.
+- **The End** is drawn as islands floating in the void.
+- Round structure markers with a white ring and shadow. They shrink to dots when you zoom out, so wide views stay readable.
+- The Inter font throughout, the app logo in the top bar, a segmented dimension switch, and structure layers as one-click rows with their marker.
+- Floating **+ / − / recentre** buttons on the map, and a progress bar while tiles generate.
 
-### Accuracy (checked against the official 26.3 game classes)
-- Noise biomes: 46,818 / 46,818
-- World spawn: 4 / 4, exact to the block
-- Strongholds: 512 / 512
-- Structure starts: 3,031 / 3,036 found (99.8%)
+### Seed finder
+- Results show in a scrollable panel with stat tiles (speed, found, checked, passed stage 1).
+- The time and speed stop counting when the search finishes.
+- The default search is now 2 villages and 2 abandoned camps near spawn.
 
-See the README for details.
+### Unchanged
+World generation and accuracy are the same as 1.0: biomes 46,818 / 46,818, spawn 4 / 4, strongholds 512 / 512, structures 99.8% against vanilla 26.3.

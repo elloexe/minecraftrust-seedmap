@@ -71,11 +71,12 @@ pub fn color(name: &str) -> [u8; 3] {
         "crimson_forest" => [221, 8, 8],
         "warped_forest" => [73, 144, 123],
         "basalt_deltas" => [64, 54, 54],
-        "the_end" => [128, 128, 255],
-        "end_highlands" => [181, 181, 54],
-        "end_midlands" => [255, 255, 128],
-        "small_end_islands" => [75, 75, 171],
-        "end_barrens" => [112, 112, 204],
+        // The End: islands bright on a near-black void.
+        "the_end" => [214, 210, 160],
+        "end_highlands" => [226, 220, 150],
+        "end_midlands" => [170, 164, 116],
+        "small_end_islands" => [22, 20, 36],
+        "end_barrens" => [72, 62, 104],
         "the_void" => [0, 0, 0],
         other => {
             // A stable colour for a biome this palette has not met.

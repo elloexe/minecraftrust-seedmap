@@ -29,6 +29,10 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
+The interface font is **Inter** by Rasmus Andersson
+(<https://rsms.me/inter/>), under the SIL Open Font License 1.1; see
+`assets/fonts/Inter-LICENSE.txt`.
+
 The executable embeds world generation data (noise settings, density
 functions, biome tags, structure definitions and the multi-noise biome
 parameter tables) extracted at build time from the official Minecraft: Java

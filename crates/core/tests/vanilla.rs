@@ -121,3 +121,29 @@ fn text_seeds_hash_like_java() {
         )
     );
 }
+
+#[test]
+fn nearby_stronghold_search_agrees_with_the_full_rings() {
+    use seedmap_core::structures::strongholds_near;
+    for seed in [1234i64, 42, 8_675_309, -7] {
+        let w = world(seed, Dimension::Overworld);
+        let all = strongholds(&w);
+        for radius in [1500, 2500, 4000] {
+            let inside = |f: &&seedmap_core::structures::Found| {
+                f.pos[0].abs() <= radius && f.pos[2].abs() <= radius
+            };
+            let mut full: Vec<_> = all.iter().filter(inside).map(|f| f.chunk).collect();
+            let near = strongholds_near(&w, radius);
+            let mut quick: Vec<_> = near.iter().filter(inside).map(|f| f.chunk).collect();
+            full.sort();
+            quick.sort();
+            assert_eq!(full, quick, "seed {seed} radius {radius}");
+            if !full.is_empty() {
+                assert!(
+                    seedmap_core::structures::stronghold_may_be_near(seed, radius),
+                    "stage one rejected seed {seed} radius {radius}"
+                );
+            }
+        }
+    }
+}

@@ -6,7 +6,7 @@
 //! the real checks: the structure's biome and terrain rules, then biome
 //! conditions, then the spawn point.
 use crate::biomes::BiomeId;
-use crate::structures::{BiomeMask, candidates, catalog, strongholds};
+use crate::structures::{BiomeMask, candidates, catalog, strongholds_near};
 use crate::world::{Dimension, World, WorldSpec};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -69,6 +69,10 @@ pub struct Progress {
     pub found: AtomicU64,
     pub stop: AtomicBool,
     pub done: AtomicBool,
+    /// Seeds whose check failed with an internal error, and the first few
+    /// messages: a bad seed is skipped instead of ending the search.
+    pub skipped: AtomicU64,
+    pub errors: Mutex<Vec<String>>,
     /// Milliseconds the search ran, once it has stopped.
     pub elapsed_ms: AtomicU64,
     pub results: Mutex<Vec<Hit>>,
@@ -136,13 +140,17 @@ pub fn start(config: SearchConfig) -> Search {
             std::thread::Builder::new()
                 .name(format!("seed search {t}"))
                 .spawn(move || {
+                    // Searching yields to the window and the map.
+                    let _ = thread_priority::set_current_thread_priority(
+                        thread_priority::ThreadPriority::Min,
+                    );
                     let mut rng = entropy ^ (t as u64).wrapping_mul(0xA24B_AED4_963E_E407);
                     const BATCH: u64 = 4096;
                     while !progress.stop.load(Ordering::Relaxed) {
                         let base = next.fetch_add(BATCH, Ordering::Relaxed);
                         let mut done = BATCH;
                         for i in 0..BATCH {
-                            if i % 256 == 0 && progress.stop.load(Ordering::Relaxed) {
+                            if progress.stop.load(Ordering::Relaxed) {
                                 done = i;
                                 break;
                             }
@@ -153,8 +161,34 @@ pub fn start(config: SearchConfig) -> Search {
                                 SeedSource::Random => splitmix(&mut rng) as i64,
                                 SeedSource::Random32 => i64::from(splitmix(&mut rng) as i32),
                             };
-                            if let Some(hit) = check_seed(seed, &config, &progress) {
-                                let mut results = progress.results.lock().unwrap();
+                            let checked =
+                                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                    check_seed(seed, &config, &progress)
+                                }));
+                            let hit = match checked {
+                                Ok(hit) => hit,
+                                Err(panic) => {
+                                    let message = panic
+                                        .downcast_ref::<String>()
+                                        .cloned()
+                                        .or_else(|| {
+                                            panic.downcast_ref::<&str>().map(|s| s.to_string())
+                                        })
+                                        .unwrap_or_else(|| "unknown error".into());
+                                    progress.skipped.fetch_add(1, Ordering::Relaxed);
+                                    if let Ok(mut errors) = progress.errors.lock()
+                                        && errors.len() < 10
+                                    {
+                                        errors.push(format!("seed {seed}: {message}"));
+                                    }
+                                    None
+                                }
+                            };
+                            if let Some(hit) = hit {
+                                let mut results = progress
+                                    .results
+                                    .lock()
+                                    .unwrap_or_else(std::sync::PoisonError::into_inner);
                                 if results.len() < config.max_results {
                                     results.push(hit);
                                     progress.found.fetch_add(1, Ordering::Relaxed);
@@ -252,10 +286,18 @@ fn enough_placed(seed: i64, set: usize, radius: i32, count: u32) -> bool {
 pub fn check_seed(seed: i64, config: &SearchConfig, progress: &Progress) -> Option<Hit> {
     // Stage one: placement alone.
     for c in &config.conditions {
-        if let Condition::Structure { set, count, radius } = *c
-            && !enough_placed(seed, set, radius, count)
-        {
-            return None;
+        match *c {
+            Condition::Structure { set, count, radius }
+                if !enough_placed(seed, set, radius, count) =>
+            {
+                return None;
+            }
+            Condition::Stronghold { radius }
+                if !crate::structures::stronghold_may_be_near(seed, radius) =>
+            {
+                return None;
+            }
+            _ => {}
         }
     }
     let mut stage: Vec<Vec<(i32, i32)>> = Vec::with_capacity(config.conditions.len());
@@ -311,6 +353,9 @@ pub fn check_seed(seed: i64, config: &SearchConfig, progress: &Progress) -> Opti
                     i64::from(*x) * i64::from(*x) + i64::from(*z) * i64::from(*z)
                 });
                 for (cx, cz) in sorted {
+                    if progress.stop.load(Ordering::Relaxed) {
+                        return None;
+                    }
                     if sampler.validate(set, cx, cz).is_none() {
                         continue;
                     }
@@ -343,6 +388,7 @@ pub fn check_seed(seed: i64, config: &SearchConfig, progress: &Progress) -> Opti
                 let mut exact = world.sampler();
                 let valid: Vec<(i32, i32)> = placed
                     .iter()
+                    .take_while(|_| !progress.stop.load(Ordering::Relaxed))
                     .filter(|(x, z)| {
                         sampler.validate(set, *x, *z).is_some()
                             && exact.validate(set, *x, *z).is_some()
@@ -369,6 +415,9 @@ pub fn check_seed(seed: i64, config: &SearchConfig, progress: &Progress) -> Opti
                 // Rings outward from the origin, 16 blocks apart.
                 let mut hit = None;
                 'rings: for r in (0..=q).step_by(4) {
+                    if progress.stop.load(Ordering::Relaxed) {
+                        return None;
+                    }
                     for dz in (-r..=r).step_by(4) {
                         for dx in (-r..=r).step_by(4) {
                             if dx.abs() != r && dz.abs() != r {
@@ -404,7 +453,7 @@ pub fn check_seed(seed: i64, config: &SearchConfig, progress: &Progress) -> Opti
             }
             Condition::Stronghold { radius } => {
                 let world = world_for(Dimension::Overworld);
-                let near = strongholds(&world)
+                let near = strongholds_near(&world, radius)
                     .into_iter()
                     .map(|f| f.pos)
                     .min_by_key(|p| i64::from(p[0]).pow(2) + i64::from(p[2]).pow(2))?;

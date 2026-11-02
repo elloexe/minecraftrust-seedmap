@@ -17,6 +17,7 @@ eframe = { version = "0.37", features = ["persistence"] }
 egui = "0.37"
 serde = { workspace = true }
 rayon = { workspace = true }
+thread-priority = "3"
 
 [build-dependencies]
 winresource = "0.1"

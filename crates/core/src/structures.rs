@@ -695,6 +695,26 @@ impl Sampler<'_> {
 /// The stronghold ring positions (all 128), each found with its biome
 /// search as the game runs it; then validated like any other start.
 pub fn strongholds(world: &World) -> Vec<Found> {
+    stronghold_search(world, None, true)
+}
+
+/// The strongholds that can lie within `radius` blocks (chebyshev) of 0 0:
+/// only those ring positions get their biome search, which skips most of
+/// the 128. For the seed finder, on its own thread.
+pub fn strongholds_near(world: &World, radius: i32) -> Vec<Found> {
+    stronghold_search(world, Some(radius), false)
+}
+
+/// Stage one for strongholds: whether any ring position can end within
+/// `radius` blocks of 0 0. Pure random draws, no world needed.
+pub fn stronghold_may_be_near(seed: i64, radius: i32) -> bool {
+    ring_searches(seed, 32, 3, 128)
+        .iter()
+        .take(3) // the first ring is always the nearest
+        .any(|s| s.may_land_near(0, 0, radius.div_euclid(16) + 1))
+}
+
+fn stronghold_search(world: &World, radius: Option<i32>, parallel: bool) -> Vec<Found> {
     let catalog = catalog();
     let Some(set) = catalog.set("strongholds") else {
         return Vec::new();
@@ -705,21 +725,24 @@ pub fn strongholds(world: &World) -> Vec<Found> {
     let preferred: std::collections::BTreeSet<claudium_world::worldgen::biome::BiomeId> =
         data().structures.ring_biomes(set.index).clone();
     let (distance, spread, count) = (32, 3, 128);
-    let searches = ring_searches(world.seed(), distance, spread, count);
-    let positions: Vec<ChunkPos> = searches
-        .par_iter()
-        .map(|search| {
-            let mut sampler = world.sampler();
-            search.find(&preferred, &mut |quarts: &[[i32; 3]]| {
-                quarts
-                    .iter()
-                    .map(|q| {
-                        claudium_world::worldgen::biome::BiomeId(u32::from(sampler.biome(*q).0))
-                    })
-                    .collect()
-            })
-        })
+    let searches: Vec<_> = ring_searches(world.seed(), distance, spread, count)
+        .into_iter()
+        .filter(|s| radius.is_none_or(|r| s.may_land_near(0, 0, r.div_euclid(16) + 1)))
         .collect();
+    let find = |search: &claudium_world::worldgen::structure::stronghold::RingSearch| {
+        let mut sampler = world.sampler();
+        search.find(&preferred, &mut |quarts: &[[i32; 3]]| {
+            quarts
+                .iter()
+                .map(|q| claudium_world::worldgen::biome::BiomeId(u32::from(sampler.biome(*q).0)))
+                .collect()
+        })
+    };
+    let positions: Vec<ChunkPos> = if parallel {
+        searches.par_iter().map(find).collect()
+    } else {
+        searches.iter().map(find).collect()
+    };
     let mut sampler = world.sampler();
     positions
         .into_iter()

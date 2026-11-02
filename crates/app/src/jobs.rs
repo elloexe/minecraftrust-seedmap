@@ -91,6 +91,8 @@ struct Shared {
     ready: Condvar,
     running: Mutex<HashSet<Job>>,
     worlds: Mutex<HashMap<WorldKey, Arc<World>>>,
+    /// Jobs that failed with an internal error: not retried every frame.
+    failed: Mutex<HashSet<Job>>,
     tx: Mutex<Sender<Done>>,
     ctx: egui::Context,
 }
@@ -109,6 +111,7 @@ impl Pool {
             ready: Condvar::new(),
             running: Mutex::new(HashSet::new()),
             worlds: Mutex::new(HashMap::new()),
+            failed: Mutex::new(HashSet::new()),
             tx: Mutex::new(tx),
             ctx,
         });
@@ -137,17 +140,21 @@ impl Pool {
 
     /// Replace the queue with these jobs, in order (skipping running ones).
     pub fn want(&self, jobs: Vec<Job>) {
-        let running = self.shared.running.lock().unwrap().clone();
-        let mut queue = self.shared.queue.lock().unwrap();
+        let running = lock(&self.shared.running).clone();
+        let failed = lock(&self.shared.failed).clone();
+        let mut queue = lock(&self.shared.queue);
         queue.clear();
-        queue.extend(jobs.into_iter().filter(|j| !running.contains(j)));
+        queue.extend(
+            jobs.into_iter()
+                .filter(|j| !running.contains(j) && !failed.contains(j)),
+        );
         if !queue.is_empty() {
             self.shared.ready.notify_all();
         }
     }
 
     pub fn busy(&self) -> usize {
-        self.shared.running.lock().unwrap().len() + self.shared.queue.lock().unwrap().len()
+        lock(&self.shared.running).len() + lock(&self.shared.queue).len()
     }
 
     pub fn finished(&self) -> Vec<Done> {
@@ -156,7 +163,7 @@ impl Pool {
 }
 
 fn world(shared: &Shared, key: WorldKey) -> Arc<World> {
-    let mut worlds = shared.worlds.lock().unwrap();
+    let mut worlds = lock(&shared.worlds);
     if worlds.len() > 12 && !worlds.contains_key(&key) {
         worlds.clear();
     }
@@ -166,23 +173,43 @@ fn world(shared: &Shared, key: WorldKey) -> Arc<World> {
         .clone()
 }
 
+/// A lock that survives a panic elsewhere (the data stays usable).
+fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    mutex
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 fn worker(shared: &Shared) {
+    // Map work yields to the window, so the UI stays responsive.
+    let _ = thread_priority::set_current_thread_priority(thread_priority::ThreadPriority::Min);
     loop {
         let job = {
-            let mut queue = shared.queue.lock().unwrap();
+            let mut queue = lock(&shared.queue);
             loop {
                 if let Some(job) = queue.pop_front() {
                     break job;
                 }
-                queue = shared.ready.wait(queue).unwrap();
+                queue = shared
+                    .ready
+                    .wait(queue)
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
             }
         };
-        if !shared.running.lock().unwrap().insert(job) {
+        if !lock(&shared.running).insert(job) {
             continue;
         }
-        let done = run(shared, job);
-        shared.running.lock().unwrap().remove(&job);
-        let _ = shared.tx.lock().unwrap().send(done);
+        let done = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run(shared, job)));
+        lock(&shared.running).remove(&job);
+        match done {
+            Ok(done) => {
+                let _ = lock(&shared.tx).send(done);
+            }
+            // Logged by the panic hook; the map shows the rest.
+            Err(_) => {
+                lock(&shared.failed).insert(job);
+            }
+        }
         shared.ctx.request_repaint();
     }
 }

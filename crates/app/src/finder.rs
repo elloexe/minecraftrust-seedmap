@@ -66,9 +66,12 @@ impl Default for FinderSettings {
             ],
             source: Source::Random,
             start: "0".into(),
+            // One core stays free for the window and the map.
             threads: std::thread::available_parallelism()
                 .map(|n| n.get())
-                .unwrap_or(4),
+                .unwrap_or(4)
+                .saturating_sub(1)
+                .max(1),
             max_results: 50,
         }
     }
@@ -89,6 +92,16 @@ fn biome_mask(name: &str) -> BiomeMask {
     m
 }
 
+/// Dense structure sets (a candidate every chunk or two) get a smaller
+/// search radius: past it, one seed alone takes minutes.
+pub const DENSE_RADIUS: i32 = 1500;
+
+fn is_dense(set: &str) -> bool {
+    catalog()
+        .set(set)
+        .is_some_and(|s| s.spacing.is_some_and(|spacing| spacing <= 2))
+}
+
 fn to_condition(c: &Cond) -> Result<Condition, String> {
     let set = |name: &str| {
         catalog()
@@ -104,7 +117,11 @@ fn to_condition(c: &Cond) -> Result<Condition, String> {
         } => Condition::Structure {
             set: set(s)?,
             count: *count,
-            radius: *radius,
+            radius: if is_dense(s) {
+                (*radius).min(DENSE_RADIUS)
+            } else {
+                *radius
+            },
         },
         Cond::Cluster {
             set: s,
@@ -115,7 +132,11 @@ fn to_condition(c: &Cond) -> Result<Condition, String> {
             set: set(s)?,
             count: *count,
             span: *span,
-            radius: *radius,
+            radius: if is_dense(s) {
+                (*radius).min(DENSE_RADIUS)
+            } else {
+                *radius
+            },
         },
         Cond::Biome { biome, radius } => Condition::Biome {
             biomes: biome_mask(biome),
@@ -288,7 +309,7 @@ impl Finder {
                 preset(
                     ui,
                     "Close stronghold",
-                    vec![Cond::Stronghold { radius: 900 }],
+                    vec![Cond::Stronghold { radius: 1600 }],
                 );
                 preset(
                     ui,
@@ -343,6 +364,15 @@ impl Finder {
                                         .suffix(" blocks"),
                                 );
                             });
+                            if is_dense(set) && *radius > DENSE_RADIUS {
+                                ui.label(
+                                    RichText::new(format!(
+                                        "Dense structure: searched up to {DENSE_RADIUS} blocks."
+                                    ))
+                                    .small()
+                                    .color(theme::WARN),
+                                );
+                            }
                         }
                         Cond::Cluster {
                             set,
@@ -372,6 +402,15 @@ impl Finder {
                                         .suffix(" blocks"),
                                 );
                             });
+                            if is_dense(set) && *radius > DENSE_RADIUS {
+                                ui.label(
+                                    RichText::new(format!(
+                                        "Dense structure: searched up to {DENSE_RADIUS} blocks."
+                                    ))
+                                    .small()
+                                    .color(theme::WARN),
+                                );
+                            }
                         }
                         Cond::Biome { biome, radius } => {
                             ui.horizontal(|ui| {
@@ -435,7 +474,7 @@ impl Finder {
                     });
                 }
                 if ui.button("Stronghold nearby").clicked() {
-                    s.conditions.push(Cond::Stronghold { radius: 1200 });
+                    s.conditions.push(Cond::Stronghold { radius: 1800 });
                 }
             });
             ui.add_space(6.0);
@@ -543,6 +582,25 @@ impl Finder {
         });
         if let Some(e) = &self.error {
             ui.colored_label(theme::WARN, e);
+        }
+        if let Some(search) = &self.search {
+            let skipped = search.progress.skipped.load(Ordering::Relaxed);
+            if skipped > 0 {
+                let errors = search
+                    .progress
+                    .errors
+                    .lock()
+                    .map(|e| e.join("\n"))
+                    .unwrap_or_default();
+                let log = crate::crash_log_path()
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_default();
+                ui.colored_label(
+                    theme::WARN,
+                    format!("{skipped} seed(s) hit an internal error and were skipped."),
+                )
+                .on_hover_text(format!("{errors}\n\nDetails: {log}"));
+            }
         }
 
         if let Some(search) = &self.search {

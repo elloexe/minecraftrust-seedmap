@@ -12,3 +12,4 @@ claudium-world.workspace = true
 serde_json.workspace = true
 flate2.workspace = true
 rayon.workspace = true
+thread-priority = "3"

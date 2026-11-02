@@ -1961,13 +1961,14 @@ dependencies = [
 
 [[package]]
 name = "minecraftrust-seedmap"
-version = "1.1.0"
+version = "1.1.1"
 dependencies = [
  "eframe",
  "egui",
  "rayon",
  "seedmap-core",
  "serde",
+ "thread-priority",
  "winresource",
 ]
 
@@ -3007,13 +3008,14 @@ dependencies = [
 
 [[package]]
 name = "seedmap-core"
-version = "1.1.0"
+version = "1.1.1"
 dependencies = [
  "claudium-core",
  "claudium-world",
  "flate2",
  "rayon",
  "serde_json",
+ "thread-priority",
 ]
 
 [[package]]
@@ -3387,6 +3389,20 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 3.0.9",
+]
+
+[[package]]
+name = "thread-priority"
+version = "3.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8d2e834949be5111506bb252643498af1514f600d9e1dceedaa42afae155b67f"
+dependencies = [
+ "bitflags 2.13.2",
+ "cfg-if",
+ "libc",
+ "log",
+ "rustversion",
+ "windows",
 ]
 
 [[package]]
@@ -4498,7 +4514,7 @@ checksum = "e450f9b2ed1dff33c94c12589a87338689467b9c4f5d8a5710bd09a847d2c8a7"
 
 [[package]]
 name = "xtask"
-version = "1.1.0"
+version = "1.1.1"
 dependencies = [
  "flate2",
  "serde_json",

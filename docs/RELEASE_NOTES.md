@@ -1,20 +1,18 @@
-A visual overhaul of the map and the app.
+A stability release for the seed finder.
 
 ### Download
-- **Windows:** `minecraftrust-seedmap-windows-x64.exe`. It's a single file and nothing needs installing. If SmartScreen warns you, choose *More info → Run anyway*.
+- **Windows:** `minecraftrust-seedmap-windows-x64.exe`. If SmartScreen warns you, choose *More info → Run anyway*.
 - **Linux:** `minecraftrust-seedmap-linux-x64`. Run `chmod +x` on it first.
 
-### New look
-- **Terrain shading:** biomes are lit by the terrain under them, so mountains, valleys and ocean depth show at a glance. You can switch it off under *Map → Terrain shading*.
-- **The End** is drawn as islands floating in the void.
-- Round structure markers with a white ring and shadow. They shrink to dots when you zoom out, so wide views stay readable.
-- The Inter font throughout, the app logo in the top bar, a segmented dimension switch, and structure layers as one-click rows with their marker.
-- Floating **+ / − / recentre** buttons on the map, and a progress bar while tiles generate.
+### Fixed
+- **Seed finder crashes.** An internal error on one seed used to close the whole app. Now that seed is skipped, the search carries on, and the finder shows how many seeds were skipped. The same protection covers the map's background workers.
+- **"Not responding" during searches.** Search and map threads run at low priority, and the finder leaves one CPU core free by default, so the window stays responsive.
+- **Stop now reacts within a second**, even in the middle of a heavy seed.
+- **"Close stronghold" never found anything:** strongholds are never closer than about 1,400 blocks, and the preset asked for 900. It now uses 1,600.
 
-### Seed finder
-- Results show in a scrollable panel with stat tiles (speed, found, checked, passed stage 1).
-- The time and speed stop counting when the search finishes.
-- The default search is now 2 villages and 2 abandoned camps near spawn.
+### Faster
+- **Stronghold searches are about 4,000× faster.** Only the first ring is checked (it always holds the nearest strongholds), and seeds without one in range are rejected before any world is generated.
+- Very dense structures (buried treasure, mineshafts, nether fossils) are searched up to 1,500 blocks, so one seed can no longer take minutes.
 
-### Unchanged
-World generation and accuracy are the same as 1.0: biomes 46,818 / 46,818, spawn 4 / 4, strongholds 512 / 512, structures 99.8% against vanilla 26.3.
+### If something still goes wrong
+Errors are written to `crash.log` next to the app's settings (`%APPDATA%\minecraftrust-seedmap\data\crash.log` on Windows), with function names in the backtrace. Please attach that file to an issue.

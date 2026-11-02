@@ -109,7 +109,7 @@ The search shown above found 50 seeds with 2 villages within 250 blocks *and* 2 
 | **Structure cluster** | 4 witch huts within 200 blocks of each other (quad huts) |
 | **Biome nearby** | mushroom fields within 800 blocks |
 | **Spawn biome** | spawn in a cherry grove |
-| **Stronghold nearby** | a stronghold within 900 blocks |
+| **Stronghold nearby** | a stronghold within 1,600 blocks (the closest ones are always about 1,400+ out) |
 
 One-click presets: *Village at spawn*, *Quad witch huts*, *Mushroom island*, *Cherry spawn*, *Close stronghold*, *Abandoned camp + Dappled forest*.
 You can search random 64-bit seeds, 32-bit seeds (the kind text seeds produce), or count up from a seed of your choice. Click **Open** on a result to load it on the map.

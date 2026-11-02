@@ -8,7 +8,46 @@ mod jobs;
 mod map;
 mod theme;
 
+/// Where a crash report goes: next to the saved settings.
+pub fn crash_log_path() -> Option<std::path::PathBuf> {
+    eframe::storage_dir("minecraftrust-seedmap").map(|d| d.join("crash.log"))
+}
+
+/// Every panic, on any thread, is appended to crash.log with a backtrace.
+/// Worker threads catch theirs and carry on; this keeps a trace of them.
+fn install_crash_log() {
+    let default = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        if let Some(path) = crash_log_path() {
+            let _ = std::fs::create_dir_all(path.parent().unwrap_or(std::path::Path::new(".")));
+            let when = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            let thread = std::thread::current()
+                .name()
+                .unwrap_or("unnamed")
+                .to_owned();
+            let report = format!(
+                "--- unix time {when}, version {}, thread '{thread}'\n{info}\n{}\n",
+                env!("CARGO_PKG_VERSION"),
+                std::backtrace::Backtrace::force_capture()
+            );
+            use std::io::Write;
+            if let Ok(mut file) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&path)
+            {
+                let _ = file.write_all(report.as_bytes());
+            }
+        }
+        default(info);
+    }));
+}
+
 fn main() -> eframe::Result<()> {
+    install_crash_log();
     // Decode the worldgen bundle while the window opens.
     std::thread::spawn(|| {
         let _ = seedmap_core::data();
